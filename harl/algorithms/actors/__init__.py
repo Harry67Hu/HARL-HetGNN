@@ -1,5 +1,7 @@
 """Algorithm registry."""
 from harl.algorithms.actors.happo import HAPPO
+from harl.algorithms.actors.happo_HOANet import HAPPO_HOANet
+from harl.algorithms.actors.mappo_HOANet import MAPPO_HOANet
 from harl.algorithms.actors.hatrpo import HATRPO
 from harl.algorithms.actors.haa2c import HAA2C
 from harl.algorithms.actors.haddpg import HADDPG
@@ -12,6 +14,7 @@ from harl.algorithms.actors.mappo import MAPPO
 
 ALGO_REGISTRY = {
     "happo": HAPPO,
+    "happo-HOANet": HAPPO_HOANet,
     "hatrpo": HATRPO,
     "haa2c": HAA2C,
     "haddpg": HADDPG,
@@ -21,4 +24,5 @@ ALGO_REGISTRY = {
     "maddpg": MADDPG,
     "matd3": MATD3,
     "mappo": MAPPO,
+    "mappo-HOANet": MAPPO_HOANet,
 }

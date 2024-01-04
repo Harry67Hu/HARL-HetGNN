@@ -4,6 +4,23 @@ import math
 import torch
 import torch.nn as nn
 
+import subprocess
+
+def get_gpu_memory_map():
+    result = subprocess.check_output(
+        [
+            'nvidia-smi', '--query-gpu=memory.used',
+            '--format=csv,nounits,noheader'
+        ], encoding='utf-8')
+
+    memory_used = [int(x) for x in result.strip().split('\n')]
+    return memory_used
+
+def select_least_used_gpu():
+    """Select the GPU with the least memory usage."""
+    memory_map = get_gpu_memory_map()
+    return f'cuda:{memory_map.index(min(memory_map))}'
+
 
 def init_device(args):
     """Init device.
@@ -14,7 +31,9 @@ def init_device(args):
     """
     if args["cuda"] and torch.cuda.is_available():
         print("choose to use gpu...")
-        device = torch.device("cuda:0")
+        device = select_least_used_gpu()
+        print(f'Auto GPU: Using GPU {device}')
+        # device = torch.device("cuda:0")
         if args["cuda_deterministic"]:
             torch.backends.cudnn.benchmark = False
             torch.backends.cudnn.deterministic = True

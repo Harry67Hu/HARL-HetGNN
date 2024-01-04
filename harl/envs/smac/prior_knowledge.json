@@ -1,0 +1,1 @@
+{"move_feats_dim": 4, "enemy_feats_dim": [10, 8], "ally_feats_dim": [9, 24], "own_feats_dim": 24, "num_type": 3}

@@ -28,6 +28,8 @@ import yaml
 
 import random
 from gym.spaces import Discrete
+import json
+
 
 races = {
     "R": sc_common.Random,
@@ -315,6 +317,13 @@ class StarCraft2Env(MultiAgentEnv):
         self._run_config = None
         self._sc2_proc = None
         self._controller = None
+
+        # NOTE load the content of harm/envs/smac/prior_knowledge.json into self.prior_knowledge
+
+        file_path = '/home/hutianyi/HARL-HetGNN/harl/envs/smac/prior_knowledge.json'
+        with open(file_path, "r") as file:
+            self.prior_knowledge = json.load(file)
+        
 
         # Try to avoid leaking SC2 processes on shutdown
         atexit.register(lambda: self.close())
@@ -1111,6 +1120,18 @@ class StarCraft2Env(MultiAgentEnv):
         enemy_feats_dim = self.get_obs_enemy_feats_size()
         ally_feats_dim = self.get_obs_ally_feats_size()
         own_feats_dim = self.get_obs_own_feats_size()
+
+
+        # NOTE if the content of harl/envs/smac/prior_knowledge.json is empty, load feats_dim into the json file
+        if len(self.prior_knowledge) == 0:
+            self.prior_knowledge["move_feats_dim"] = move_feats_dim
+            self.prior_knowledge["enemy_feats_dim"] = enemy_feats_dim
+            self.prior_knowledge["ally_feats_dim"] = ally_feats_dim
+            self.prior_knowledge["own_feats_dim"] = own_feats_dim
+            self.prior_knowledge["num_type"] = self.unit_type_bits
+            file_path = '/home/hutianyi/HARL-HetGNN/harl/envs/smac/prior_knowledge.json'
+            with open(file_path, "w") as f:
+                json.dump(self.prior_knowledge, f)
 
         move_feats = np.zeros(move_feats_dim, dtype=np.float32)
         enemy_feats = np.zeros(enemy_feats_dim, dtype=np.float32)
@@ -1964,14 +1985,16 @@ class StarCraft2Env(MultiAgentEnv):
             timestep_feats = 1
             all_feats += timestep_feats
 
-        return [
+        result =  [
             all_feats * self.stacked_frames if self.use_stacked_frames else all_feats,
             [n_allies, n_ally_feats],
             [n_enemies, n_enemy_feats],
             [1, move_feats],
             [1, own_feats + agent_id_feats + timestep_feats],
         ]
-
+        assert True
+        return result
+        
     def get_state_size(self):
         """Returns the size of the global state."""
         if self.obs_instead_of_state:

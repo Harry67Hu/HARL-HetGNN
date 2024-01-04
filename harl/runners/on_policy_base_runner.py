@@ -89,9 +89,11 @@ class OnPolicyBaseRunner:
             )
         self.num_agents = get_num_agents(args["env"], env_args, self.envs)
 
-        print("share_observation_space: ", self.envs.share_observation_space)
-        print("observation_space: ", self.envs.observation_space)
-        print("action_space: ", self.envs.action_space)
+        # TODO 将这里与全文global的算法 比如 happo+HOA-Net统一进去 从而更好的编程      
+        # NOTE 在这里调用一下get_obs_agent函数,将相关信息存储进JSON中
+        store_prior_knowledge, _, _ = self.envs.reset()
+
+
 
         # actor
         if self.share_param:

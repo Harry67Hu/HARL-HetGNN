@@ -1,2 +1,5 @@
-map_name: 2s_vs_1sc
+# map_name: 2s_vs_1sc
+map_name: MMM
+# map_name: 3s5z_vs_3s6z
+# map_name: MMM2
 state_type: FP # choose from FP (Feature Pruned) and EP (Environment Provided)

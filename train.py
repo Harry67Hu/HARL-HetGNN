@@ -24,6 +24,9 @@ def main():
             "maddpg",
             "matd3",
             "mappo",
+            # new things
+            "happo-HOANet",
+            "mappo-HOANet",
         ],
         help="Algorithm name. Choose from: happo, hatrpo, haa2c, haddpg, hatd3, hasac, had3qn, maddpg, matd3, mappo.",
     )
@@ -53,6 +56,11 @@ def main():
         help="If set, load existing experiment config file instead of reading from yaml config file.",
     )
     args, unparsed_args = parser.parse_known_args()
+
+    # NOTE Remove all the content of harl/envs/smac/prior_knowledge.json, make it a {}
+    prior_knowledge_json_file_path = '/home/hutianyi/HARL-HetGNN/harl/envs/smac/prior_knowledge.json'
+    with open(prior_knowledge_json_file_path, "w") as f:
+                json.dump({}, f)
 
     def process(arg):
         try:

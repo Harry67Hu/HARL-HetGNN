@@ -1,4 +1,4 @@
-# This is the configuration file for the HAPPO algorithm.
+# This is the configuration file for the MAPPO algorithm.
 seed:
   # whether to use the specified seed
   seed_specify: True
@@ -13,7 +13,7 @@ device:
   torch_threads: 4
 train:
   # number of parallel environments for training data collection
-  n_rollout_threads: 20
+  n_rollout_threads: 32
   # number of total training steps
   num_env_steps: 10000000
   # number of steps per environment per training data collection
@@ -29,9 +29,7 @@ train:
   # whether to consider the case of truncation when an episode is done
   use_proper_time_limits: True
   # if set, load models from this directory; otherwise, randomly initialise the models
-  # -----------------------------For Render-------------------------------- 
   model_dir: ~
-  # model_dir: /home/hutianyi/HARL-HetGNN/results/smac/MMM/happo/MMM_model/seed-09999-2023-12-26-11-17-20/models
 eval:
   # whether to use evaluation
   use_eval: True
@@ -41,15 +39,14 @@ eval:
   eval_episodes: 20
 render:
   # whether to use render
-  # -----------------------------For Render-------------------------------- 
   use_render: False
-  # use_render: True
   # number of episodes to render
   render_episodes: 10
 model:
   # network parameters
   # hidden sizes for mlp module in the network
-  hidden_sizes: [128, 128]
+  # hidden_sizes: [128, 128]
+  hidden_sizes: [64, 64]
   # activation function, choose from sigmoid, tanh, relu, leaky_relu, selu
   activation_func: relu
   # whether to use feature normalization
@@ -69,9 +66,11 @@ model:
   data_chunk_length: 10
   # optimizer parameters
   # actor learning rate
-  lr: 0.0005
+  # lr: 0.0005
+  lr: 0.001
   # critic learning rate
-  critic_lr: 0.0005
+  # critic_lr: 0.0005
+  critic_lr: 0.001
   # eps in Adam
   opti_eps: 0.00001
   # weight_decay in Adam
@@ -117,9 +116,9 @@ algo:
   # method of aggregating the probability of multi-dimensional actions, choose from prod, mean
   action_aggregation: prod
   # whether to share parameter among actors
-  share_param: False
+  share_param: True
   # whether to use a fixed optimisation order
-  fixed_order: False
+  fixed_order: True
 logger:
   # logging directory
   log_dir: "./results"
