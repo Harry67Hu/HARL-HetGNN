@@ -12,13 +12,8 @@ device:
   # arg to torch.set_num_threads
   torch_threads: 4
 train:
-<<<<<<< Updated upstream
   # number of parallel environments for training data collection
   n_rollout_threads: 20
-=======
-  # number of parallel environments for training data collection, 2 for debug and 32 for training
-  n_rollout_threads: 32
->>>>>>> Stashed changes
   # number of total training steps
   num_env_steps: 10000000
   # number of steps per environment per training data collection
@@ -51,7 +46,7 @@ model:
   # network parameters
   
   # network structures, choose from "HOA-Net", "HAMA", "Multi-Attention", "E-GAT", "MLP"
-  special_NN: "HAMA"
+  special_NN: "E-GAT"
 
   # hidden sizes for mlp module in the network
   # hidden_sizes: [128, 128]
