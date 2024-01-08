@@ -16,7 +16,7 @@ class HAPPO_HOANet(OnPolicyBase):
             act_space: (gym.spaces) action space.
             device: (torch.device) device to use for tensor operations.
         """
-        super(HAPPO_HOANet, self).__init__(args, obs_space, act_space, device, special_NN="HOA-Net")
+        super(HAPPO_HOANet, self).__init__(args, obs_space, act_space, device)
 
         self.clip_param = args["clip_param"]
         self.ppo_epoch = args["ppo_epoch"]

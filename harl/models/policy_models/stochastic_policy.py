@@ -26,7 +26,7 @@ class HetGAT(nn.Module):
         self.add_elu = add_elu
         self.negative_slope = 0.2
 
-        assert n_heads == 1, '目前还没有涉及多头的形式！'
+        assert n_heads == 1, 'No multi-head support now!'
         assert self.add_self, ('Het-GAT need to add self info!')
 
         self.W = nn.ParameterList([nn.Parameter(torch.Tensor(input_dim, hidden_dim)) for _ in range(self.num_type)])
@@ -132,6 +132,95 @@ class HetGAT(nn.Module):
         return H_E.view(B, self.hidden_dim)
 
 
+class E_GAT(nn.Module):
+    '''
+        GAT-based method
+        input shape:  [batch, num_node, input_dim]
+        output shape: [batch, hidden_dim]
+        mask shape :  [batch, num_node]
+    '''
+    def __init__(self, input_dim, hidden_dim, output_dim=0, n_heads=1, add_self=True, add_elu=True):
+        super(E_GAT, self).__init__()
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+        self.output_dim = output_dim
+        self.n_heads = n_heads
+        self.add_self = add_self
+        self.add_elu = add_elu
+        self.negative_slope = 0.2
+
+        assert n_heads == 1, 'No multi-head support now!'
+
+        self.W = nn.Parameter(torch.Tensor(input_dim, hidden_dim))
+        self.a = nn.Parameter(torch.Tensor(hidden_dim*2, 1))
+        self.act = nn.LeakyReLU(negative_slope=self.negative_slope)
+
+        # nn.init.xavier_uniform_(self.W.data, gain=1.414)
+        # nn.init.xavier_uniform_(self.a.data, gain=1.414)
+        # =========Kaiming init=========
+        nn.init.kaiming_uniform_(self.W.data, a=self.negative_slope)  
+        nn.init.kaiming_uniform_(self.a.data, a=self.negative_slope)
+
+    def init_parameters(self):
+        params = [self.W, self.a]
+        for param in params:
+            stdv = 1. / math.sqrt(param.size(-1))
+            param.data.uniform_(-stdv, stdv)
+    
+    def forward(self, h, mask=None):
+        H = torch.matmul(h, self.W)
+        B, N, C = H.size()
+
+        # Attention applies only to the [first node] with [other nodes]
+        a_input = torch.cat([H[:, 0:1, :].repeat(1, N, 1), H], dim=2).view(B, N, 2*self.hidden_dim)
+        e = self.act(torch.matmul(a_input, self.a).squeeze(-1))
+
+        if mask is not None:  
+            e[mask.bool()] = -math.inf
+
+        attention = F.softmax(e, dim=-1)
+        # If there are nodes with no neighbours then softmax returns nan so fix them to 0
+        if mask is not None:
+            attnc = attention.clone()
+            attnc[mask] = 0
+            attention = attnc
+        assert not torch.isnan(attention).any(), ('nan problem!')
+        weighted_sum = torch.matmul(attention.unsqueeze(1), H).squeeze(1)
+        # weighted_sum = torch.matmul(attention, H)
+        assert not torch.isnan(weighted_sum).any(), ('nan problem!')
+
+        if self.add_elu:
+            H_E = F.elu(H[:, 0, :] + weighted_sum) if self.add_self else F.elu(weighted_sum)
+        else:
+            H_E = (H[:, 0, :] + weighted_sum) if self.add_self else (weighted_sum)
+
+        return H_E.view(B, self.hidden_dim)
+
+
+class SimpleAttention(nn.Module):
+    def __init__(self, h_dim):
+        super().__init__()
+        self.W_query = nn.Parameter(torch.Tensor(h_dim, h_dim))
+        self.W_key = nn.Parameter(torch.Tensor(h_dim, h_dim))
+        self.W_val = nn.Parameter(torch.Tensor(h_dim, h_dim))
+        self.init_parameters()
+
+    def init_parameters(self):
+        for param in self.parameters():
+            stdv = 1. / math.sqrt(param.size(-1))
+            param.data.uniform_(-stdv, stdv)
+
+    def forward(self, k, q, v, mask=None):
+        Q = torch.matmul(q, self.W_query) 
+        K = torch.matmul(k, self.W_key) 
+        V = torch.matmul(v, self.W_val)
+
+        norm_factor = 1 / math.sqrt(Q.shape[-1])
+        compat = norm_factor * torch.matmul(Q, K.transpose(-1, -2)) 
+        if mask is not None: compat[mask.bool()] = -math.inf
+        # in order to solve the problem of 0*nan = nan, we need to convert nan in V to 0
+        score = torch.nan_to_num(F.softmax(compat, dim=-1), 0)
+        return torch.matmul(score, V) 
 
 
 class StochasticPolicy(nn.Module):
@@ -158,7 +247,7 @@ class StochasticPolicy(nn.Module):
         self.special_NN = special_NN
 
         # NOTE 在这里提取JSON中的地图信息，然后根据地图信息来确定输入的维度
-        if self.special_NN in ["HOA-Net"]:
+        if self.special_NN is not None:
             # extract map info
             import json
             file_path = '/home/hutianyi/HARL-HetGNN/harl/envs/smac/prior_knowledge.json'
@@ -173,26 +262,96 @@ class StochasticPolicy(nn.Module):
                 self.num_agents = self.num_ally + 1
                 assert self.num_actions == action_space.n, ('Wrong num_actions!')
 
-            # construct networks
-            # TODO 这里没有加观测预处理网络，之后要加上看看效果如何（直接将HetGAT当做base
-            preprocess = MLPBase
-            self.preprocess_layer = preprocess(args, [self.own_feats_dim])
-            self.base = HetGAT(self.hidden_sizes[-1], self.hidden_sizes[-1], output_dim = self.hidden_sizes[-1], num_type = self.num_type)
-            # self.base = HetGAT(self.own_feats_dim, self.hidden_sizes[-1], output_dim = self.hidden_sizes[-1], num_type = self.num_type)
-            if self.use_naive_recurrent_policy or self.use_recurrent_policy:
-                self.rnn = RNNLayer(
+            if self.special_NN in ["HOA-Net"]:
+                # construct networks
+                preprocess = MLPBase
+                self.preprocess_layer = preprocess(args, [self.own_feats_dim])
+                self.base = HetGAT(self.hidden_sizes[-1], self.hidden_sizes[-1], output_dim = self.hidden_sizes[-1], num_type = self.num_type)
+                # self.base = HetGAT(self.own_feats_dim, self.hidden_sizes[-1], output_dim = self.hidden_sizes[-1], num_type = self.num_type)
+                if self.use_naive_recurrent_policy or self.use_recurrent_policy:
+                    self.rnn = RNNLayer(
+                        self.hidden_sizes[-1] + self.move_feats_dim + self.num_agents,
+                        self.hidden_sizes[-1] + self.move_feats_dim + self.num_agents,
+                        self.recurrent_n,
+                        self.initialization_method,
+                    )
+                self.act = ACTLayer(
+                    action_space,
                     self.hidden_sizes[-1] + self.move_feats_dim + self.num_agents,
-                    self.hidden_sizes[-1] + self.move_feats_dim + self.num_agents,
-                    self.recurrent_n,
                     self.initialization_method,
+                    self.gain,
+                    args,
                 )
-            self.act = ACTLayer(
-                action_space,
-                self.hidden_sizes[-1] + self.move_feats_dim + self.num_agents,
-                self.initialization_method,
-                self.gain,
-                args,
-            )
+            elif self.special_NN in ["HAMA"]:
+                self.base = E_GAT(self.own_feats_dim, self.hidden_sizes[-1], output_dim = self.hidden_sizes[-1])
+                if self.use_naive_recurrent_policy or self.use_recurrent_policy:
+                    self.rnn = RNNLayer(
+                        self.hidden_sizes[-1] + self.move_feats_dim + self.num_agents,
+                        self.hidden_sizes[-1] + self.move_feats_dim + self.num_agents,
+                        self.recurrent_n,
+                        self.initialization_method,
+                    )
+                self.act = ACTLayer(
+                    action_space,
+                    self.hidden_sizes[-1] + self.move_feats_dim + self.num_agents,
+                    self.initialization_method,
+                    self.gain,
+                    args,
+                )
+            elif self.special_NN in ["E-GAT"]:
+                preprocess = MLPBase
+                self.base = E_GAT(self.own_feats_dim, self.hidden_sizes[-1], output_dim = self.hidden_sizes[-1])
+                if self.use_naive_recurrent_policy or self.use_recurrent_policy:
+                    self.rnn = RNNLayer(
+                        self.hidden_sizes[-1] + self.move_feats_dim + self.num_agents,
+                        self.hidden_sizes[-1] + self.move_feats_dim + self.num_agents,
+                        self.recurrent_n,
+                        self.initialization_method,
+                    )
+                self.act = ACTLayer(
+                    action_space,
+                    self.hidden_sizes[-1] + self.move_feats_dim + self.num_agents,
+                    self.initialization_method,
+                    self.gain,
+                    args,
+                )
+            elif self.special_NN in ["Multi-Attention"]:
+                preprocess = MLPBase
+                self.preprocess_layer = preprocess(args, [self.own_feats_dim])
+                self.attention_layer = SimpleAttention(self.hidden_sizes[-1])
+                if self.use_naive_recurrent_policy or self.use_recurrent_policy:
+                    self.rnn = RNNLayer(
+                        self.hidden_sizes[-1] + self.move_feats_dim + self.num_agents,
+                        self.hidden_sizes[-1] + self.move_feats_dim + self.num_agents,
+                        self.recurrent_n,
+                        self.initialization_method,
+                    )
+                self.act = ACTLayer(
+                    action_space,
+                    self.hidden_sizes[-1]*(self.num_agents+self.num_opp) + self.move_feats_dim + self.num_agents,
+                    self.initialization_method,
+                    self.gain,
+                    args,
+                )
+            elif self.special_NN in ["MLP"]:
+                mlp_base = MLPBase
+                self.base = mlp_base(args, [self.own_feats_dim * (self.num_agents+self.num_opp)])
+                if self.use_naive_recurrent_policy or self.use_recurrent_policy:
+                    self.rnn = RNNLayer(
+                        self.hidden_sizes[-1] + self.move_feats_dim + self.num_agents,
+                        self.hidden_sizes[-1] + self.move_feats_dim + self.num_agents,
+                        self.recurrent_n,
+                        self.initialization_method,
+                    )
+                self.act = ACTLayer(
+                    action_space,
+                    self.hidden_sizes[-1] + self.move_feats_dim + self.num_agents,
+                    self.initialization_method,
+                    self.gain,
+                    args,
+                )
+            else:
+                raise NotImplementedError
 
         else:
             obs_shape =  (obs_space)
@@ -234,15 +393,44 @@ class StochasticPolicy(nn.Module):
             rnn_states: (torch.Tensor) updated RNN hidden states.
         """
         obs = check(obs).to(**self.tpdv)
+        # ============== NOTE ==============
+        # Below are the new things
         if self.special_NN in ["HOA-Net"]:
-            # ============== NOTE ==============
-            # Below are the new things
             avai_obs, HetGraph_obs = self.reconstruct_observation(obs)
             HetGraph_mask = self.calculate_mask(HetGraph_obs)
             Preprocessed_obs = self.preprocess_layer(HetGraph_obs)
             aggeregated_obs = self.base(Preprocessed_obs, self.num_ally, self.num_opp, HetGraph_mask)
             actor_features = torch.cat([avai_obs, aggeregated_obs], dim=-1)
-            # ============== NOTE ==============
+        elif self.special_NN in ["HAMA"]:
+            avai_obs, ally_obs, opp_obs = self.reconstruct_observation_HAMA(obs)
+            ally_Dead_Mask = torch.all(ally_obs== 0, dim=-1)
+            ally_h = self.base(ally_obs, ally_Dead_Mask)
+            opp_Dead_Mask = torch.all(opp_obs== 0, dim=-1)
+            opp_h = self.base(opp_obs, opp_Dead_Mask)
+            stacked_h = torch.stack([ally_h, opp_h], dim=-1)
+            weights = F.softmax(stacked_h, dim=-1)
+            weighted_h = (weights * stacked_h).sum(dim=-1)
+            actor_features = torch.cat([avai_obs, weighted_h], dim=-1)
+        elif self.special_NN in ["E-GAT"]:
+            avai_obs, HetGraph_obs = self.reconstruct_observation(obs)
+            Dead_Mask = torch.all(HetGraph_obs== 0, dim=-1)
+            aggeregated_obs = self.base(HetGraph_obs, Dead_Mask)
+            actor_features = torch.cat([avai_obs, aggeregated_obs], dim=-1)
+        elif self.special_NN in ["Multi-Attention"]:
+            avai_obs, HetGraph_obs = self.reconstruct_observation(obs)
+            Dead_Mask = torch.all(HetGraph_obs== 0, dim=-1)
+            Pro_obs = self.preprocess_layer(HetGraph_obs)
+            aggeregated_obs = self.attention_layer(k=Pro_obs,q=Pro_obs,v=Pro_obs, mask=Dead_Mask)
+            B, N, C = aggeregated_obs.shape
+            aggeregated_obs = aggeregated_obs.view(B,N*C)
+            actor_features = torch.cat([avai_obs, aggeregated_obs], dim=-1)
+        elif self.special_NN in ["MLP"]:
+            avai_obs, HetGraph_obs = self.reconstruct_observation(obs)
+            B, N, C = HetGraph_obs.shape
+            cat_obs = HetGraph_obs.view(B,N*C)
+            aggeregated_obs = self.base(cat_obs)
+            actor_features = torch.cat([avai_obs, aggeregated_obs], dim=-1)
+        # ============== NOTE ==============
         else:
             # avai_obs, HetGraph_obs = self.reconstruct_observation(obs)
             # B, N, C = HetGraph_obs.shape
@@ -291,15 +479,45 @@ class StochasticPolicy(nn.Module):
         if active_masks is not None:
             active_masks = check(active_masks).to(**self.tpdv)
         
+        # ============== NOTE ==============
+        # Below are the new things
         if self.special_NN in ["HOA-Net"]:
-            # ============== NOTE ==============
-            # Below are the new things
             avai_obs, HetGraph_obs = self.reconstruct_observation(obs)
             HetGraph_mask = self.calculate_mask(HetGraph_obs)
             Preprocessed_obs = self.preprocess_layer(HetGraph_obs)
             aggeregated_obs = self.base(Preprocessed_obs, self.num_ally, self.num_opp, HetGraph_mask)
             actor_features = torch.cat([avai_obs, aggeregated_obs], dim=-1)
-            # ============== NOTE ==============
+        elif self.special_NN in ["HAMA"]:
+            avai_obs, ally_obs, opp_obs = self.reconstruct_observation_HAMA(obs)
+            ally_Dead_Mask = torch.all(ally_obs== 0, dim=-1)
+            ally_h = self.base(ally_obs, ally_Dead_Mask)
+            opp_Dead_Mask = torch.all(opp_obs== 0, dim=-1)
+            opp_h = self.base(opp_obs, opp_Dead_Mask)
+            stacked_h = torch.stack([ally_h, opp_h], dim=-1)
+            weights = F.softmax(stacked_h, dim=-1)
+            weighted_h = (weights * stacked_h).sum(dim=-1)
+            actor_features = torch.cat([avai_obs, weighted_h], dim=-1)
+        elif self.special_NN in ["E-GAT"]:
+            avai_obs, HetGraph_obs = self.reconstruct_observation(obs)
+            Dead_Mask = torch.all(HetGraph_obs== 0, dim=-1)
+            aggeregated_obs = self.base(HetGraph_obs, Dead_Mask)
+            actor_features = torch.cat([avai_obs, aggeregated_obs], dim=-1)
+        elif self.special_NN in ["Multi-Attention"]:
+            avai_obs, HetGraph_obs = self.reconstruct_observation(obs)
+            Dead_Mask = torch.all(HetGraph_obs== 0, dim=-1)
+            Pro_obs = self.preprocess_layer(HetGraph_obs)
+            aggeregated_obs = self.attention_layer(k=Pro_obs,q=Pro_obs,v=Pro_obs, mask=Dead_Mask)
+            B, N, C = aggeregated_obs.shape
+            aggeregated_obs = aggeregated_obs.view(B,N*C)
+            actor_features = torch.cat([avai_obs, aggeregated_obs], dim=-1)
+        elif self.special_NN in ["MLP"]:
+            avai_obs, HetGraph_obs = self.reconstruct_observation(obs)
+            B, N, C = HetGraph_obs.shape
+            cat_obs = HetGraph_obs.view(B,N*C)
+            aggeregated_obs = self.base(cat_obs)
+            actor_features = torch.cat([avai_obs, aggeregated_obs], dim=-1)
+        # ============== NOTE ==============
+        
         else:
             # avai_obs, HetGraph_obs = self.reconstruct_observation(obs)
             # B, N, C = HetGraph_obs.shape
@@ -355,6 +573,43 @@ class StochasticPolicy(nn.Module):
 
         return avai_obs, shaped_obs
     
+    def reconstruct_observation_HAMA(self, obs):
+        '''
+        This is only for SMAC envs.
+        Assert Have agent_id included in obs.
+        input:  obs [B, complex_dim]
+        return: avai_obs [B, move_feats_dim] + shaped_obs [B, self + num_ally + num_opp, own_feats_dim]
+        '''
+        
+        B = obs.shape[0]
+
+        X = self.prior_knowledge['enemy_feats_dim'][-1]
+        assert self.num_actions + X == self.own_feats_dim, ('Wrong own_feats_dim or X compute!')
+
+        temp_opp_dim = self.num_opp * X
+        temp_ally_dim = self.num_ally * (X + self.num_actions)
+        temp_self_dim = 1 * (X + self.num_actions)
+
+        temp_ally = obs[:, :temp_ally_dim]                                                    # [B, num_ally * (X+num_actions)]
+        temp_opp  = obs[:, temp_ally_dim:temp_ally_dim + temp_opp_dim]                        # [B, num_opp * X]
+        temp_self = obs[:, temp_ally_dim + temp_opp_dim + self.move_feats_dim:
+                        temp_ally_dim + temp_opp_dim + self.move_feats_dim + temp_self_dim]   # [B, 1 * (X+num_actions)]
+        temp_move_feats = obs[:, temp_ally_dim + temp_opp_dim:temp_ally_dim + temp_opp_dim + self.move_feats_dim]
+        temp_agent_id   = obs[:, temp_ally_dim + temp_opp_dim + self.move_feats_dim + temp_self_dim:]
+
+        temp_opp = temp_opp.view(B, self.num_opp, X)
+        temp_ally = temp_ally.view(B, self.num_ally, X + self.num_actions)
+        temp_self = temp_self.view(B, 1, X + self.num_actions)
+
+        avai_obs = torch.cat([temp_move_feats, temp_agent_id], dim=-1)
+
+        temp_opp = torch.cat([temp_opp, torch.zeros(B, self.num_opp, self.num_actions).to(obs.device)], dim=2)
+
+        ally_obs = torch.cat([temp_self, temp_ally],dim=1)
+        opp_obs  = torch.cat([temp_self, temp_opp],dim=1)
+
+        return avai_obs, ally_obs, opp_obs
+    
     def calculate_mask(self, HetGraph_obs):
         '''
         Only for SMAC envs.
@@ -371,5 +626,6 @@ class StochasticPolicy(nn.Module):
         ALL_TYPE_MASK = HetGraph_obs_reshaped[-self.num_type:, :, :].bool()
 
         return ALL_TYPE_MASK
+    
 
 

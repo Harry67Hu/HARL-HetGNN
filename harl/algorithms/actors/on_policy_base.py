@@ -6,7 +6,7 @@ from harl.utils.models_tools import update_linear_schedule
 
 
 class OnPolicyBase:
-    def __init__(self, args, obs_space, act_space, device=torch.device("cpu"), special_NN=None):
+    def __init__(self, args, obs_space, act_space, device=torch.device("cpu")):
         """Initialize Base class.
         Args:
             args: (dict) arguments.
@@ -31,12 +31,15 @@ class OnPolicyBase:
         # save observation and action spaces
         self.obs_space = obs_space
         self.act_space = act_space
+
+        self.special_NN = args["special_NN"]
+
         # create actor network
-        if special_NN is None:
+        if self.special_NN is None:
             self.actor = StochasticPolicy(args, self.obs_space, self.act_space, self.device)
         else:
-            assert special_NN in ["HOA-Net",], "Unsupported Special_Nerual-Net!: {}".format(special_NN)
-            self.actor = StochasticPolicy(args, self.obs_space, self.act_space, self.device, special_NN=special_NN)
+            assert self.special_NN in ["HOA-Net","HAMA","E-GAT","Multi-Attention","MLP"], "Unsupported Special_Nerual-Net!: {}".format(self.special_NN)
+            self.actor = StochasticPolicy(args, self.obs_space, self.act_space, self.device, special_NN=self.special_NN)
         # create actor optimizer
         self.actor_optimizer = torch.optim.Adam(
             self.actor.parameters(),
